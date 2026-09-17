@@ -1,0 +1,24 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - durationcheck
+    - dupword
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
