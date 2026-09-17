@@ -1,0 +1,8 @@
+version: "3"
+tasks:
+  clienthub-test:
+    desc: Запуск clienthub-service и test/clienthub-test
+    cmds:
+      - go run test/clienthub-test/main.go &
+      - sleep 1
+      - go run cmd/clienthub-service/main.go
