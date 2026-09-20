@@ -8,7 +8,7 @@ metadata:
 spec:
   project: delivery-fullcycle
   source:
-    repoURL: http://forgejo.forgejo.svc.cluster.local:3000/kazah/delivery-fullcycle.git
+    repoURL: http://forgejo.forgejo.svc.cluster.local:3000/ultragomosex/delivery-fullcycle.git
     targetRevision: HEAD
     path: deploy/k8s/overlays/prod/frontend
   destination:

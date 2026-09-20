@@ -9,4 +9,22 @@ resources:
   - forgejo-repo-secret.yaml
 
 patches:
-  - path: server-nodeport.yaml
+  - target:
+      kind: Service
+      name: argocd-server
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: argocd-server
+      spec:
+        type: NodePort
+        ports:
+          - name: http
+            port: 80
+            targetPort: 8080
+            nodePort: 30080
+          - name: https
+            port: 443
+            targetPort: 8080
+            nodePort: 30443
