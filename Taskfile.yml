@@ -1,8 +1,34 @@
 version: "3"
+
+includes:
+  backend:
+    taskfile: backend/Taskfile.yml
+    dir: backend
+
 tasks:
-  clienthub-test:
-    desc: Запуск clienthub-service и test/clienthub-test
+  default:
+    desc: List all tasks
     cmds:
-      - go run test/clienthub-test/main.go &
-      - sleep 1
-      - go run cmd/clienthub-service/main.go
+      - task --list
+
+  k8s:build-dev:
+    desc: Preview kustomize rendered manifests for dev
+    cmds:
+      - kubectl kustomize deploy/k8s/overlays/dev/backend
+      - kubectl kustomize deploy/k8s/overlays/dev/frontend
+
+  bootstrap:forgejo:
+    desc: Deploy Forgejo bootstrap manifests to k8s
+    cmds:
+      - kubectl apply -k deploy/argocd/bootstrap/forgejo
+
+  bootstrap:argocd:
+    desc: Deploy ArgoCD bootstrap manifests to k8s
+    cmds:
+      - kubectl apply -k deploy/argocd/bootstrap/argocd
+
+  argocd:root:
+    desc: Apply root ArgoCD app-of-apps
+    cmds:
+      - kubectl apply -f deploy/argocd/projects/delivery-fullcycle-project.yaml
+      - kubectl apply -f deploy/argocd/root-app.yaml

@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forgejo
+  namespace: argocd
+  annotations:
+    # Защита от случайного удаления при десинхронизации
+    argocd.argoproj.io/sync-options: Prune=false
+spec:
+  project: delivery-fullcycle
+  source:
+    repoURL: http://forgejo.forgejo.svc.cluster.local:3000/kazah/delivery-fullcycle.git
+    targetRevision: HEAD
+    path: deploy/argocd/bootstrap/forgejo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: forgejo
+  syncPolicy:
+    # Не включаем агрессивный автоматический prune, чтобы Argo никогда не удалил PVC или StatefulSet Forgejo
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+  ignoreDifferences:
+    # Игнорируем динамические секреты, токены и поля томов
+    - group: ""
+      kind: PersistentVolumeClaim
+      jsonPointers:
+        - /spec/volumeName
+        - /status

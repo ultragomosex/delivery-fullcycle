@@ -1,0 +1,22 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build backend binary
+    cmds:
+      - go build -o bin/server cmd/clienthub-service/main.go
+
+  run:
+    desc: Run clienthub-service
+    cmds:
+      - go run cmd/clienthub-service/main.go
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test -v ./...
+
+  docker-build:
+    desc: Build backend docker image
+    cmds:
+      - docker build -t delivery-backend:latest .

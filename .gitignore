@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+clienthub-test
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Test binary
+*.test
+*.out
+
+# Environment & IDE
+.env
+.env.local
+.idea/
+.vscode/
+*.swp
+*~

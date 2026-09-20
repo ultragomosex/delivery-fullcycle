@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgejo
+  namespace: forgejo
+  labels:
+    app.kubernetes.io/name: forgejo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: forgejo
+    spec:
+      nodeSelector:
+        workload: storage
+      containers:
+        - name: forgejo
+          image: codeberg.org/forgejo/forgejo:9-rootless
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: USER_UID
+              value: "1000"
+            - name: USER_GID
+              value: "1000"
+            - name: FORGEJO__server__DOMAIN
+              value: "forgejo.local"
+            - name: FORGEJO__server__ROOT_URL
+              value: "http://10.10.10.114:30000/"
+            - name: FORGEJO__server__SSH_PORT
+              value: "2222"
+            # Подключение к PostgreSQL через CloudNativePG
+            - name: FORGEJO__database__DB_TYPE
+              value: "postgres"
+            - name: FORGEJO__database__HOST
+              value: "forgejo-db-rw:5432"
+            - name: FORGEJO__database__NAME
+              value: "forgejo"
+            - name: FORGEJO__database__USER
+              value: "forgejo"
+            - name: FORGEJO__database__PASSWD
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-db-app
+                  key: password
+            - name: FORGEJO__security__INSTALL_LOCK
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 3000
+            - name: ssh
+              containerPort: 2222
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gitea
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: forgejo-data

@@ -1,0 +1,44 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to promote'
+        required: true
+        default: 'backend'
+        type: choice
+        options:
+          - backend
+          - frontend
+      target_env:
+        description: 'Target Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - prod
+      image_tag:
+        description: 'Image tag to deploy'
+        required: true
+        default: 'latest'
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update overlay tag
+        run: |
+          OVERLAY_DIR="deploy/k8s/overlays/${{ github.event.inputs.target_env }}/${{ github.event.inputs.service }}"
+          sed -i "s/newTag: .*/newTag: ${{ github.event.inputs.image_tag }}/g" "$OVERLAY_DIR/kustomization.yaml"
+
+      - name: Commit and Push
+        run: |
+          git config user.name "gitops-bot"
+          git config user.email "bot@delivery-fullcycle.local"
+          git commit -am "chore: promote ${{ github.event.inputs.service }} to ${{ github.event.inputs.target_env }} tag ${{ github.event.inputs.image_tag }}"
+          git push
