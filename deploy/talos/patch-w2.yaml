@@ -1,0 +1,10 @@
+machine:
+  network:
+    interfaces:
+      - interface: eth0
+        dhcp: false
+        addresses:
+          - 10.10.10.12/24
+        routes:
+          - network: 0.0.0.0/0
+            gateway: 10.10.10.1
