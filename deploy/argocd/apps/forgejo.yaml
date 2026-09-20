@@ -4,7 +4,6 @@ metadata:
   name: forgejo
   namespace: argocd
   annotations:
-    # Защита от случайного удаления при десинхронизации
     argocd.argoproj.io/sync-options: Prune=false
 spec:
   project: delivery-fullcycle
@@ -16,7 +15,6 @@ spec:
     server: https://kubernetes.default.svc
     namespace: forgejo
   syncPolicy:
-    # Не включаем агрессивный автоматический prune, чтобы Argo никогда не удалил PVC или StatefulSet Forgejo
     automated:
       prune: false
       selfHeal: true
@@ -25,7 +23,14 @@ spec:
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
   ignoreDifferences:
-    # Игнорируем динамические секреты, токены и поля томов
+    - group: "apps"
+      kind: Deployment
+      jsonPointers:
+        - /status
+    - group: "postgresql.cnpg.io"
+      kind: Cluster
+      jsonPointers:
+        - /status
     - group: ""
       kind: PersistentVolumeClaim
       jsonPointers:
