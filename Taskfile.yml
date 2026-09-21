@@ -27,6 +27,11 @@ tasks:
     cmds:
       - kubectl apply -k deploy/argocd/bootstrap/argocd
 
+  bootstrap:rustfs:
+    desc: Deploy RustFS bootstrap manifests to k8s
+    cmds:
+      - kubectl apply -k deploy/argocd/bootstrap/rustfs
+
   argocd:root:
     desc: Apply root ArgoCD app-of-apps
     cmds:

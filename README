@@ -1,3 +1,7 @@
 ArgoCD - http://192.168.1.99:30080 : admin : lELTdDlhovj7avRe
 
 ForgeJO repo - http://10.10.10.114:30000/ultragomosex/delivery-fullcycle
+
+RustFS S3 - rustfs.rustfs.svc.cluster.local:9000 (S3 API) / :9001 (console), внутри кластера.
+Доступ снаружи: kubectl port-forward -n rustfs svc/rustfs 9000:9000 9001:9001
+Креды: в secret rustfs-credentials (namespace rustfs)
