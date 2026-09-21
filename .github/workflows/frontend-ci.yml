@@ -21,7 +21,12 @@ jobs:
         with:
           node-version: 20
 
-      - name: Build Docker Image
+      - name: Build and Push Docker Image
         run: |
           IMAGE_TAG=${GITHUB_SHA::7}
-          docker build -t delivery-frontend:${IMAGE_TAG} -f frontend/Dockerfile frontend/
+          REGISTRY="10.10.10.114:30000"
+          IMAGE="10.10.10.114:30000/ultragomosex/delivery-frontend"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u "${{ github.actor }}" --password-stdin "$REGISTRY"
+          docker build -t "${IMAGE}:${IMAGE_TAG}" -t "${IMAGE}:dev-latest" -f frontend/Dockerfile frontend/
+          docker push "${IMAGE}:${IMAGE_TAG}"
+          docker push "${IMAGE}:dev-latest"

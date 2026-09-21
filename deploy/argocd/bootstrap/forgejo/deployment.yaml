@@ -50,6 +50,14 @@ spec:
                   key: password
             - name: FORGEJO__security__INSTALL_LOCK
               value: "true"
+            # Packages (Docker Container Registry)
+            - name: FORGEJO__packages__ENABLED
+              value: "true"
+            # Forgejo Actions
+            - name: FORGEJO__actions__ENABLED
+              value: "true"
+            - name: FORGEJO__actions__DEFAULT_ACTIONS_URL
+              value: "https://github.com"
           ports:
             - name: http
               containerPort: 3000

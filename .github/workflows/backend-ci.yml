@@ -27,7 +27,12 @@ jobs:
         run: |
           go test -v ./...
 
-      - name: Build Docker Image
+      - name: Build and Push Docker Image
         run: |
           IMAGE_TAG=${GITHUB_SHA::7}
-          docker build -t delivery-backend:${IMAGE_TAG} -f backend/Dockerfile backend/
+          REGISTRY="10.10.10.114:30000"
+          IMAGE="10.10.10.114:30000/ultragomosex/delivery-backend"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login -u "${{ github.actor }}" --password-stdin "$REGISTRY"
+          docker build -t "${IMAGE}:${IMAGE_TAG}" -t "${IMAGE}:dev-latest" -f backend/Dockerfile backend/
+          docker push "${IMAGE}:${IMAGE_TAG}"
+          docker push "${IMAGE}:dev-latest"

@@ -10,5 +10,5 @@ namePrefix: dev-
 
 images:
   - name: delivery-frontend
-    newName: delivery-frontend
+    newName: 10.10.10.114:30000/ultragomosex/delivery-frontend
     newTag: dev-latest

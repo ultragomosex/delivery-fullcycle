@@ -25,6 +25,12 @@ machine:
                   - network: 0.0.0.0/0
                     gateway: 10.10.10.1
 
+    registries:
+        mirrors:
+            10.10.10.114:30000:
+                endpoints:
+                    - http://10.10.10.114:30000
+
     # Features describe individual Talos features that can be switched on or off.
     features:
         diskQuotaSupport: true # Enable XFS project quota support for EPHEMERAL partition and user disks.
