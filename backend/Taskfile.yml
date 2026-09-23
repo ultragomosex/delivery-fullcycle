@@ -17,10 +17,26 @@ tasks:
       - go run tests/clienthub/main.go {{.CLI_ARGS}}
 
 
+  media:build:
+    desc: Build media-service binary
+    cmds:
+      - go build -o bin/media-service cmd/media-service/main.go
+
+  media:run:
+    desc: Run media-service HTTP server
+    cmds:
+      - go run cmd/media-service/main.go {{.CLI_ARGS}}
+
+  media:migrate:
+    desc: Run one-time media migration from PostgreSQL to RustFS S3
+    cmds:
+      - go run cmd/media-service/main.go -run-once-migrate {{.CLI_ARGS}}
+
   test:
     desc: Run unit tests
     cmds:
       - go test -v ./...
+
 
   docker-build:
     desc: Build backend docker image
