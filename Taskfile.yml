@@ -37,3 +37,14 @@ tasks:
     cmds:
       - kubectl apply -f deploy/argocd/projects/delivery-fullcycle-project.yaml
       - kubectl apply -f deploy/argocd/root-app.yaml
+
+  seed:users:
+    desc: Parse and seed users into PostgreSQL from randomuser.me
+    cmds:
+      - go run ./utils/users.go {{.CLI_ARGS}}
+
+  seed:products:
+    desc: Parse and seed products into PostgreSQL from dummyjson.com
+    cmds:
+      - go run ./utils/products.go {{.CLI_ARGS}}
+
