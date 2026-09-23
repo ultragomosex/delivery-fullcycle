@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-service
+  labels:
+    app.kubernetes.io/name: media-service
+    app.kubernetes.io/part-of: delivery-fullcycle
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: media-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: media-service
+    spec:
+      imagePullSecrets:
+        - name: delivery-registry
+      containers:
+        - name: media-service
+          image: delivery-media:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PORT
+              value: ":8081"
+            - name: DATABASE_URL
+              value: "postgres://delivery:delivery123@forgejo-db-rw.forgejo.svc.cluster.local:5432/delivery?sslmode=disable"
+            - name: S3_ENDPOINT
+              value: "rustfs.rustfs.svc.cluster.local:9000"
+            - name: S3_ACCESS_KEY
+              value: "ea5fc5464891940eeebaceb2"
+            - name: S3_SECRET_KEY
+              value: "4b2d3855a3832263df61c340b1c0526cf1dde4c4b702c8a1"
+            - name: S3_BUCKET
+              value: "delivery-media"
+          ports:
+            - name: http
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
