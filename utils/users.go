@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -17,9 +19,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// RandomUserResponse represents the root response from randomuser.me API.
 type RandomUserResponse struct {
 	Results []RandomUserItem `json:"results"`
 	Info    struct {
@@ -30,7 +33,6 @@ type RandomUserResponse struct {
 	} `json:"info"`
 }
 
-// RandomUserItem maps the individual user payload from randomuser.me.
 type RandomUserItem struct {
 	Gender string `json:"gender"`
 	Name   struct {
@@ -72,7 +74,6 @@ type RandomUserItem struct {
 	Nat string `json:"nat"`
 }
 
-// UserEntity is the domain model matching the PostgreSQL users table.
 type UserEntity struct {
 	UUID         string
 	FirstName    string
@@ -90,28 +91,32 @@ type UserEntity struct {
 	RegisteredAt time.Time
 }
 
-// UsersParser handles HTTP fetching, data transformation, and PostgreSQL persistence.
 type UsersParser struct {
 	client    *http.Client
 	dbPool    *pgxpool.Pool
+	s3Client  *minio.Client
+	s3Bucket  string
+	uploadS3  bool
 	logger    *slog.Logger
 	apiURL    string
 	batchSize int
 }
 
-func NewUsersParser(dbPool *pgxpool.Pool, logger *slog.Logger, batchSize int) *UsersParser {
+func NewUsersParser(dbPool *pgxpool.Pool, s3Client *minio.Client, s3Bucket string, uploadS3 bool, logger *slog.Logger, batchSize int) *UsersParser {
 	return &UsersParser{
 		client: &http.Client{
 			Timeout: 20 * time.Second,
 		},
 		dbPool:    dbPool,
+		s3Client:  s3Client,
+		s3Bucket:  s3Bucket,
+		uploadS3:  uploadS3,
 		logger:    logger,
 		apiURL:    "https://randomuser.me/api/",
 		batchSize: batchSize,
 	}
 }
 
-// FetchUsers retrieves N users from randomuser.me with optional nationality filtering.
 func (p *UsersParser) FetchUsers(ctx context.Context, count int, nat string) ([]UserEntity, error) {
 	if count <= 0 {
 		return nil, fmt.Errorf("count must be > 0, got %d", count)
@@ -158,6 +163,16 @@ func (p *UsersParser) FetchUsers(ctx context.Context, count int, nat string) ([]
 		postcodeStr := fmt.Sprintf("%v", item.Location.Postcode)
 		streetStr := fmt.Sprintf("%d %s", item.Location.Street.Number, item.Location.Street.Name)
 
+		avatarURL := item.Picture.Large
+		if p.uploadS3 && p.s3Client != nil && avatarURL != "" {
+			s3URL, err := p.uploadAvatarToS3(ctx, item.Login.UUID, avatarURL)
+			if err != nil {
+				p.logger.Warn("upload avatar to s3 failed", slog.String("uuid", item.Login.UUID), slog.String("error", err.Error()))
+			} else {
+				avatarURL = s3URL
+			}
+		}
+
 		user := UserEntity{
 			UUID:         item.Login.UUID,
 			FirstName:    item.Name.First,
@@ -167,7 +182,7 @@ func (p *UsersParser) FetchUsers(ctx context.Context, count int, nat string) ([]
 			Phone:        item.Phone,
 			Username:     item.Login.Username,
 			PasswordHash: item.Login.Password,
-			AvatarURL:    item.Picture.Large,
+			AvatarURL:    avatarURL,
 			Street:       streetStr,
 			City:         item.Location.City,
 			Country:      item.Location.Country,
@@ -181,7 +196,42 @@ func (p *UsersParser) FetchUsers(ctx context.Context, count int, nat string) ([]
 	return users, nil
 }
 
-// Migrate ensures the PostgreSQL table and required indexes exist.
+func (p *UsersParser) uploadAvatarToS3(ctx context.Context, uuid, imageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	s3Key := fmt.Sprintf("avatars/%s.jpg", uuid)
+	_, err = p.s3Client.PutObject(ctx, p.s3Bucket, s3Key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("/media/%s/%s", p.s3Bucket, s3Key), nil
+}
+
 func (p *UsersParser) Migrate(ctx context.Context) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS users (
@@ -215,7 +265,6 @@ func (p *UsersParser) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// UpsertBatch saves users in batches using PostgreSQL ON CONFLICT for idempotency.
 func (p *UsersParser) UpsertBatch(ctx context.Context, users []UserEntity) (int, error) {
 	if len(users) == 0 {
 		return 0, nil
@@ -289,12 +338,17 @@ func (p *UsersParser) UpsertBatch(ctx context.Context, users []UserEntity) (int,
 
 func main() {
 	var (
-		dbURL     string
-		count     int
-		batchSize int
-		nat       string
-		dryRun    bool
-		timeout   time.Duration
+		dbURL       string
+		s3Endpoint  string
+		s3AccessKey string
+		s3SecretKey string
+		s3Bucket    string
+		uploadS3    bool
+		count       int
+		batchSize   int
+		nat         string
+		dryRun      bool
+		timeout     time.Duration
 	)
 
 	defaultDB := os.Getenv("DATABASE_URL")
@@ -302,12 +356,37 @@ func main() {
 		defaultDB = "postgres://postgres:postgres@localhost:5432/delivery?sslmode=disable"
 	}
 
-	flag.StringVar(&dbURL, "db-url", defaultDB, "PostgreSQL connection string (or DATABASE_URL env)")
-	flag.IntVar(&count, "count", 100, "Number of users to fetch from randomuser.me")
-	flag.IntVar(&batchSize, "batch-size", 50, "Batch size for database upserts")
-	flag.StringVar(&nat, "nat", "", "Nationalities filter (e.g. 'us,gb,de', empty for all)")
-	flag.BoolVar(&dryRun, "dry-run", false, "Fetch and parse only without connecting to database")
-	flag.DurationVar(&timeout, "timeout", 60*time.Second, "Execution timeout")
+	defaultS3Endpoint := os.Getenv("S3_ENDPOINT")
+	if defaultS3Endpoint == "" {
+		defaultS3Endpoint = "127.0.0.1:9000"
+	}
+
+	defaultAccessKey := os.Getenv("S3_ACCESS_KEY")
+	if defaultAccessKey == "" {
+		defaultAccessKey = "ea5fc5464891940eeebaceb2"
+	}
+
+	defaultSecretKey := os.Getenv("S3_SECRET_KEY")
+	if defaultSecretKey == "" {
+		defaultSecretKey = "4b2d3855a3832263df61c340b1c0526cf1dde4c4b702c8a1"
+	}
+
+	defaultBucket := os.Getenv("S3_BUCKET")
+	if defaultBucket == "" {
+		defaultBucket = "delivery-media"
+	}
+
+	flag.StringVar(&dbURL, "db-url", defaultDB, "")
+	flag.StringVar(&s3Endpoint, "s3-endpoint", defaultS3Endpoint, "")
+	flag.StringVar(&s3AccessKey, "s3-access-key", defaultAccessKey, "")
+	flag.StringVar(&s3SecretKey, "s3-secret-key", defaultSecretKey, "")
+	flag.StringVar(&s3Bucket, "s3-bucket", defaultBucket, "")
+	flag.BoolVar(&uploadS3, "upload-s3", true, "")
+	flag.IntVar(&count, "count", 100, "")
+	flag.IntVar(&batchSize, "batch-size", 50, "")
+	flag.StringVar(&nat, "nat", "", "")
+	flag.BoolVar(&dryRun, "dry-run", false, "")
+	flag.DurationVar(&timeout, "timeout", 60*time.Second, "")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -345,7 +424,26 @@ func main() {
 		logger.Info("successfully connected to PostgreSQL")
 	}
 
-	parser := NewUsersParser(pool, logger, batchSize)
+	var s3Client *minio.Client
+	if uploadS3 && !dryRun {
+		var err error
+		s3Client, err = minio.New(s3Endpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+			Secure: false,
+		})
+		if err != nil {
+			logger.Warn("s3 client init failed, disabling s3 upload", slog.String("error", err.Error()))
+			uploadS3 = false
+		} else {
+			exists, err := s3Client.BucketExists(ctx, s3Bucket)
+			if err == nil && !exists {
+				_ = s3Client.MakeBucket(ctx, s3Bucket, minio.MakeBucketOptions{})
+			}
+			logger.Info("connected to s3 for direct uploads", slog.String("bucket", s3Bucket))
+		}
+	}
+
+	parser := NewUsersParser(pool, s3Client, s3Bucket, uploadS3, logger, batchSize)
 
 	users, err := parser.FetchUsers(ctx, count, nat)
 	if err != nil {

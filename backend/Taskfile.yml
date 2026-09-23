@@ -27,11 +27,6 @@ tasks:
     cmds:
       - go run cmd/media-service/main.go {{.CLI_ARGS}}
 
-  media:migrate:
-    desc: Run one-time media migration from PostgreSQL to RustFS S3
-    cmds:
-      - go run cmd/media-service/main.go -run-once-migrate {{.CLI_ARGS}}
-
   test:
     desc: Run unit tests
     cmds:

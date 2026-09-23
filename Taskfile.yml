@@ -48,3 +48,9 @@ tasks:
     cmds:
       - go run ./utils/products.go {{.CLI_ARGS}}
 
+  migrate:media:
+    desc: Migrate existing media from PostgreSQL to RustFS S3
+    cmds:
+      - go run ./utils/migrate_media.go {{.CLI_ARGS}}
+
+

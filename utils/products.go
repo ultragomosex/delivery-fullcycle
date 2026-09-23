@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -17,9 +19,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// DummyProductsResponse represents the payload from https://dummyjson.com/products.
 type DummyProductsResponse struct {
 	Products []DummyProductItem `json:"products"`
 	Total    int                `json:"total"`
@@ -27,7 +30,6 @@ type DummyProductsResponse struct {
 	Limit    int                `json:"limit"`
 }
 
-// DummyProductItem maps individual product from dummyjson.com.
 type DummyProductItem struct {
 	ID                 int      `json:"id"`
 	Title              string   `json:"title"`
@@ -46,13 +48,12 @@ type DummyProductItem struct {
 	Images             []string `json:"images"`
 }
 
-// ProductEntity represents the domain model for PostgreSQL products table.
 type ProductEntity struct {
 	ExternalID         int
 	Title              string
 	Description        string
 	Category           string
-	Section            string // food, electronics, household, general
+	Section            string
 	Price              float64
 	DiscountPercentage float64
 	Rating             float64
@@ -66,8 +67,6 @@ type ProductEntity struct {
 	TagsJSON           []byte
 }
 
-// MapToSection categorizes items into high-level delivery sections:
-// food (еда), electronics (техника), household (бытовые товары).
 func MapToSection(category string) string {
 	cat := strings.ToLower(strings.TrimSpace(category))
 	switch cat {
@@ -82,28 +81,32 @@ func MapToSection(category string) string {
 	}
 }
 
-// ProductsParser handles fetching, normalizing, and inserting products into PostgreSQL.
 type ProductsParser struct {
 	client    *http.Client
 	dbPool    *pgxpool.Pool
+	s3Client  *minio.Client
+	s3Bucket  string
+	uploadS3  bool
 	logger    *slog.Logger
 	apiURL    string
 	batchSize int
 }
 
-func NewProductsParser(dbPool *pgxpool.Pool, logger *slog.Logger, batchSize int) *ProductsParser {
+func NewProductsParser(dbPool *pgxpool.Pool, s3Client *minio.Client, s3Bucket string, uploadS3 bool, logger *slog.Logger, batchSize int) *ProductsParser {
 	return &ProductsParser{
 		client: &http.Client{
 			Timeout: 20 * time.Second,
 		},
 		dbPool:    dbPool,
+		s3Client:  s3Client,
+		s3Bucket:  s3Bucket,
+		uploadS3:  uploadS3,
 		logger:    logger,
 		apiURL:    "https://dummyjson.com/products",
 		batchSize: batchSize,
 	}
 }
 
-// FetchProducts downloads products from dummyjson.com with optional section filtering.
 func (p *ProductsParser) FetchProducts(ctx context.Context, limit int, sectionFilter string) ([]ProductEntity, error) {
 	u, err := url.Parse(p.apiURL)
 	if err != nil {
@@ -148,7 +151,30 @@ func (p *ProductsParser) FetchProducts(ctx context.Context, limit int, sectionFi
 			continue
 		}
 
-		imagesJSON, _ := json.Marshal(item.Images)
+		thumbnailURL := item.Thumbnail
+		var s3Images []string
+
+		if p.uploadS3 && p.s3Client != nil {
+			if thumbnailURL != "" {
+				s3URL, err := p.uploadImageToS3(ctx, fmt.Sprintf("products/%d/thumbnail.webp", item.ID), thumbnailURL)
+				if err == nil {
+					thumbnailURL = s3URL
+				}
+			}
+
+			for idx, img := range item.Images {
+				s3URL, err := p.uploadImageToS3(ctx, fmt.Sprintf("products/%d/image_%d.webp", item.ID, idx+1), img)
+				if err == nil {
+					s3Images = append(s3Images, s3URL)
+				} else {
+					s3Images = append(s3Images, img)
+				}
+			}
+		} else {
+			s3Images = item.Images
+		}
+
+		imagesJSON, _ := json.Marshal(s3Images)
 		tagsJSON, _ := json.Marshal(item.Tags)
 
 		brand := item.Brand
@@ -175,7 +201,7 @@ func (p *ProductsParser) FetchProducts(ctx context.Context, limit int, sectionFi
 			SKU:                item.SKU,
 			Weight:             item.Weight,
 			AvailabilityStatus: status,
-			Thumbnail:          item.Thumbnail,
+			Thumbnail:          thumbnailURL,
 			ImagesJSON:         imagesJSON,
 			TagsJSON:           tagsJSON,
 		}
@@ -189,7 +215,41 @@ func (p *ProductsParser) FetchProducts(ctx context.Context, limit int, sectionFi
 	return entities, nil
 }
 
-// Migrate ensures the PostgreSQL products table and indexes exist.
+func (p *ProductsParser) uploadImageToS3(ctx context.Context, s3Key, imageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/webp"
+	}
+
+	_, err = p.s3Client.PutObject(ctx, p.s3Bucket, s3Key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("/media/%s/%s", p.s3Bucket, s3Key), nil
+}
+
 func (p *ProductsParser) Migrate(ctx context.Context) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS products (
@@ -226,7 +286,6 @@ func (p *ProductsParser) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// UpsertBatch saves products in batches using ON CONFLICT for idempotency.
 func (p *ProductsParser) UpsertBatch(ctx context.Context, products []ProductEntity) (int, error) {
 	if len(products) == 0 {
 		return 0, nil
@@ -309,12 +368,17 @@ func (p *ProductsParser) UpsertBatch(ctx context.Context, products []ProductEnti
 
 func main() {
 	var (
-		dbURL     string
-		limit     int
-		section   string
-		batchSize int
-		dryRun    bool
-		timeout   time.Duration
+		dbURL       string
+		s3Endpoint  string
+		s3AccessKey string
+		s3SecretKey string
+		s3Bucket    string
+		uploadS3    bool
+		limit       int
+		section     string
+		batchSize   int
+		dryRun      bool
+		timeout     time.Duration
 	)
 
 	defaultDB := os.Getenv("DATABASE_URL")
@@ -322,12 +386,37 @@ func main() {
 		defaultDB = "postgres://postgres:postgres@localhost:5432/delivery?sslmode=disable"
 	}
 
-	flag.StringVar(&dbURL, "db-url", defaultDB, "PostgreSQL connection string (or DATABASE_URL env)")
-	flag.IntVar(&limit, "limit", 0, "Products limit (0 fetches all available products)")
-	flag.StringVar(&section, "section", "all", "Filter by section: 'all', 'food', 'electronics', 'household'")
-	flag.IntVar(&batchSize, "batch-size", 50, "Batch size for database upserts")
-	flag.BoolVar(&dryRun, "dry-run", false, "Fetch and parse only without connecting to database")
-	flag.DurationVar(&timeout, "timeout", 60*time.Second, "Execution timeout")
+	defaultS3Endpoint := os.Getenv("S3_ENDPOINT")
+	if defaultS3Endpoint == "" {
+		defaultS3Endpoint = "127.0.0.1:9000"
+	}
+
+	defaultAccessKey := os.Getenv("S3_ACCESS_KEY")
+	if defaultAccessKey == "" {
+		defaultAccessKey = "ea5fc5464891940eeebaceb2"
+	}
+
+	defaultSecretKey := os.Getenv("S3_SECRET_KEY")
+	if defaultSecretKey == "" {
+		defaultSecretKey = "4b2d3855a3832263df61c340b1c0526cf1dde4c4b702c8a1"
+	}
+
+	defaultBucket := os.Getenv("S3_BUCKET")
+	if defaultBucket == "" {
+		defaultBucket = "delivery-media"
+	}
+
+	flag.StringVar(&dbURL, "db-url", defaultDB, "")
+	flag.StringVar(&s3Endpoint, "s3-endpoint", defaultS3Endpoint, "")
+	flag.StringVar(&s3AccessKey, "s3-access-key", defaultAccessKey, "")
+	flag.StringVar(&s3SecretKey, "s3-secret-key", defaultSecretKey, "")
+	flag.StringVar(&s3Bucket, "s3-bucket", defaultBucket, "")
+	flag.BoolVar(&uploadS3, "upload-s3", true, "")
+	flag.IntVar(&limit, "limit", 0, "")
+	flag.StringVar(&section, "section", "all", "")
+	flag.IntVar(&batchSize, "batch-size", 50, "")
+	flag.BoolVar(&dryRun, "dry-run", false, "")
+	flag.DurationVar(&timeout, "timeout", 60*time.Second, "")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -365,7 +454,26 @@ func main() {
 		logger.Info("successfully connected to PostgreSQL")
 	}
 
-	parser := NewProductsParser(pool, logger, batchSize)
+	var s3Client *minio.Client
+	if uploadS3 && !dryRun {
+		var err error
+		s3Client, err = minio.New(s3Endpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+			Secure: false,
+		})
+		if err != nil {
+			logger.Warn("s3 client init failed, disabling s3 upload", slog.String("error", err.Error()))
+			uploadS3 = false
+		} else {
+			exists, err := s3Client.BucketExists(ctx, s3Bucket)
+			if err == nil && !exists {
+				_ = s3Client.MakeBucket(ctx, s3Bucket, minio.MakeBucketOptions{})
+			}
+			logger.Info("connected to s3 for direct uploads", slog.String("bucket", s3Bucket))
+		}
+	}
+
+	parser := NewProductsParser(pool, s3Client, s3Bucket, uploadS3, logger, batchSize)
 
 	products, err := parser.FetchProducts(ctx, limit, section)
 	if err != nil {
@@ -373,7 +481,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Calculate section breakdown statistics
 	sectionCounts := make(map[string]int)
 	for _, p := range products {
 		sectionCounts[p.Section]++

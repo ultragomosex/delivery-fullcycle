@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"delivery-fullcycle/internal/migrator"
 	"delivery-fullcycle/internal/storage"
 
 	"github.com/go-chi/chi/v5"
@@ -33,8 +32,6 @@ func main() {
 		s3SecretKey     string
 		s3Bucket        string
 		s3SSL           bool
-		migrateOnStart  bool
-		runOnceMigrate  bool
 		shutdownTimeout time.Duration
 	)
 
@@ -78,8 +75,6 @@ func main() {
 	flag.StringVar(&s3SecretKey, "s3-secret-key", defaultSecretKey, "")
 	flag.StringVar(&s3Bucket, "s3-bucket", defaultBucket, "")
 	flag.BoolVar(&s3SSL, "s3-ssl", false, "")
-	flag.BoolVar(&migrateOnStart, "migrate", false, "")
-	flag.BoolVar(&runOnceMigrate, "run-once-migrate", false, "")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout", 10*time.Second, "")
 	flag.Parse()
 
@@ -120,32 +115,6 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("connected to rustfs s3", slog.String("bucket", s3Bucket), slog.String("endpoint", s3Endpoint))
-
-	mig := migrator.New(pool, s3Client, s3Bucket, logger)
-
-	if runOnceMigrate {
-		logger.Info("running one-time media migration")
-		uCount, pCount, err := mig.MigrateAll(ctx)
-		if err != nil {
-			logger.Error("migration failed", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-		logger.Info("one-time media migration finished", slog.Int("users", uCount), slog.Int("products", pCount))
-		return
-	}
-
-	if migrateOnStart {
-		go func() {
-			bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer bgCancel()
-			uCount, pCount, err := mig.MigrateAll(bgCtx)
-			if err != nil {
-				logger.Error("background migration failed", slog.String("error", err.Error()))
-			} else {
-				logger.Info("background migration finished", slog.Int("users", uCount), slog.Int("products", pCount))
-			}
-		}()
-	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -206,7 +175,6 @@ func main() {
 	r.Get("/media/{bucket}/*", mediaHandler)
 	r.Head("/media/{bucket}/*", mediaHandler)
 
-
 	r.Post("/api/media/upload", func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
 			http.Error(w, "invalid multipart form: "+err.Error(), http.StatusBadRequest)
@@ -251,41 +219,6 @@ func main() {
 			"key":    key,
 			"url":    fmt.Sprintf("/media/%s/%s", targetBucket, key),
 			"size":   header.Size,
-		})
-	})
-
-	r.Post("/api/media/migrate", func(w http.ResponseWriter, r *http.Request) {
-		wait := r.URL.Query().Get("wait") == "true"
-		if wait {
-			uCount, pCount, err := mig.MigrateAll(r.Context())
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status":   "completed",
-				"users":    uCount,
-				"products": pCount,
-			})
-			return
-		}
-
-		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-			defer cancel()
-			uCount, pCount, err := mig.MigrateAll(bgCtx)
-			if err != nil {
-				logger.Error("migration trigger failed", slog.String("error", err.Error()))
-			} else {
-				logger.Info("migration trigger finished", slog.Int("users", uCount), slog.Int("products", pCount))
-			}
-		}()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status": "migration_started",
 		})
 	})
 
