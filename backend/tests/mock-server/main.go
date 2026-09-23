@@ -21,10 +21,10 @@ func main() {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("Получен заказ от %s: %d позиций", cart.ClientID, len(cart.Items))
+		log.Printf("Order received: user %d (%s), items: %d, total: %.2f", cart.UserID, cart.UserEmail, len(cart.Items), cart.TotalPrice)
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	log.Println("Сервер запущен на :8080")
+	log.Println("Mock server running on :8080")
 	http.ListenAndServe(":8080", r)
 }

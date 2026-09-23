@@ -4,12 +4,18 @@ tasks:
   build:
     desc: Build backend binary
     cmds:
-      - go build -o bin/server cmd/clienthub-service/main.go
+      - go build -o bin/server main.go
 
   run:
-    desc: Run clienthub-service
+    desc: Run backend server
     cmds:
-      - go run cmd/clienthub-service/main.go
+      - go run main.go
+
+  clienthub:
+    desc: Run clienthub load generator
+    cmds:
+      - go run tests/clienthub/main.go {{.CLI_ARGS}}
+
 
   test:
     desc: Run unit tests
