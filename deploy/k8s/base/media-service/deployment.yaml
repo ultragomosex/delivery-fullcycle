@@ -14,13 +14,17 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: media-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/metrics"
     spec:
       imagePullSecrets:
         - name: delivery-registry
       containers:
         - name: media-service
           image: delivery-media:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: PORT
               value: ":8081"

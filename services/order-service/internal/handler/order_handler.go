@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"delivery-fullcycle/services/order-service/internal/kafka"
+	"delivery-fullcycle/services/order-service/internal/metrics"
 	"delivery-fullcycle/services/order-service/internal/model"
 	"delivery-fullcycle/services/order-service/internal/repository"
 
@@ -16,14 +18,16 @@ import (
 )
 
 type OrderHandler struct {
-	repo   *repository.OrderRepository
-	dbPool *pgxpool.Pool
+	repo          *repository.OrderRepository
+	dbPool        *pgxpool.Pool
+	kafkaProducer *kafka.Producer
 }
 
-func NewOrderHandler(repo *repository.OrderRepository, dbPool *pgxpool.Pool) *OrderHandler {
+func NewOrderHandler(repo *repository.OrderRepository, dbPool *pgxpool.Pool, kafkaProducer *kafka.Producer) *OrderHandler {
 	return &OrderHandler{
-		repo:   repo,
-		dbPool: dbPool,
+		repo:          repo,
+		dbPool:        dbPool,
+		kafkaProducer: kafkaProducer,
 	}
 }
 
@@ -51,18 +55,45 @@ func (h *OrderHandler) Health(w http.ResponseWriter, r *http.Request) {
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		metrics.OrdersCreatedTotal.WithLabelValues("bad_request").Inc()
 		http.Error(w, "invalid request payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	order, err := h.repo.Create(r.Context(), &req)
 	if err != nil {
+		metrics.OrdersCreatedTotal.WithLabelValues("failed").Inc()
 		if errors.Is(err, repository.ErrEmptyCart) || errors.Is(err, repository.ErrProductNotFound) || errors.Is(err, repository.ErrProductStock) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		http.Error(w, "failed to create order: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	metrics.OrdersCreatedTotal.WithLabelValues("success").Inc()
+	metrics.OrdersAmountTotal.Add(order.TotalPrice)
+
+	if h.kafkaProducer != nil {
+		items := make([]kafka.OrderItemEvent, len(order.Items))
+		for i, item := range order.Items {
+			items[i] = kafka.OrderItemEvent{
+				ProductID:    item.ProductID,
+				ProductTitle: item.ProductTitle,
+				Quantity:     item.Quantity,
+				UnitPrice:    item.UnitPrice,
+				TotalPrice:   item.TotalPrice,
+			}
+		}
+
+		_ = h.kafkaProducer.PublishOrderCreated(r.Context(), &kafka.OrderCreatedEvent{
+			OrderID:    order.ID,
+			UserID:     order.UserID,
+			TotalPrice: order.TotalPrice,
+			Status:     order.Status,
+			Items:      items,
+			CreatedAt:  order.CreatedAt,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

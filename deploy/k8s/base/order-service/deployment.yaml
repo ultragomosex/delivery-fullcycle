@@ -14,18 +14,26 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: order-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/metrics"
     spec:
       imagePullSecrets:
         - name: delivery-registry
       containers:
         - name: order-service
           image: delivery-order:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: PORT
               value: ":8082"
             - name: DATABASE_URL
               value: "postgres://delivery:delivery123@forgejo-db-rw.forgejo.svc.cluster.local:5432/delivery?sslmode=disable"
+            - name: KAFKA_BROKERS
+              value: "kafka.kafka.svc.cluster.local:9092"
+            - name: KAFKA_TOPIC_ORDERS
+              value: "orders.events"
           ports:
             - name: http
               containerPort: 8082

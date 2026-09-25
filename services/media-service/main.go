@@ -12,11 +12,13 @@ import (
 
 	"delivery-fullcycle/services/media-service/internal/config"
 	"delivery-fullcycle/services/media-service/internal/handler"
+	"delivery-fullcycle/services/media-service/internal/metrics"
 	"delivery-fullcycle/services/media-service/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -65,11 +67,13 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(metrics.Middleware)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", h.Health)
 	r.Get("/readyz", h.Health)
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Get("/media/{bucket}/*", h.ServeMedia)
 	r.Head("/media/{bucket}/*", h.ServeMedia)

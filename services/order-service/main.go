@@ -7,16 +7,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"delivery-fullcycle/services/order-service/internal/config"
 	"delivery-fullcycle/services/order-service/internal/handler"
+	"delivery-fullcycle/services/order-service/internal/kafka"
+	"delivery-fullcycle/services/order-service/internal/metrics"
 	"delivery-fullcycle/services/order-service/internal/repository"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -58,16 +62,22 @@ func main() {
 	}
 	logger.Info("order schema verified")
 
-	h := handler.NewOrderHandler(repo, pool)
+	kafkaBrokers := strings.Split(cfg.KafkaBrokers, ",")
+	kafkaProducer := kafka.NewProducer(kafkaBrokers, cfg.KafkaTopicOrders, logger)
+	defer kafkaProducer.Close()
+
+	h := handler.NewOrderHandler(repo, pool, kafkaProducer)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(metrics.Middleware)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", h.Health)
 	r.Get("/readyz", h.Health)
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Post("/api/orders", h.Create)
 	r.Get("/api/orders", h.List)
@@ -97,6 +107,10 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server forced to shutdown", slog.String("error", err.Error()))
+	}
+
+	if err := kafkaProducer.Close(); err != nil {
+		logger.Error("kafka producer close failed", slog.String("error", err.Error()))
 	}
 
 	logger.Info("order-service stopped cleanly")
